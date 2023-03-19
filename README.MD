@@ -6,6 +6,10 @@ The streamer object states are slightly modified to make streaming work. Ie. eit
 
 Works for 0.3.7 & 0.3DL Servers as well as samp-compat and all client versions (incl. the client side 0.3DL compat ASI plugin).
 
+The reason I made this is that YSF's function is actually bugged on the newer streamer versions. The child objects are not properly destreamed when the base object destreamed.
+
+I guess you can still use it if you use a similar technique to this include, but I didn't want to rely on a memory hacking plugin more than I already need to.
+
 # Important
 
 Most of the streaming logic is handled in PAWN. It's quite straight forward thanks to E_STREAMER_CUSTOM but still not optimal if you have a huge amount.
