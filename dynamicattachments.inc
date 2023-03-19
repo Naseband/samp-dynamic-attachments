@@ -170,7 +170,7 @@ stock AttachDynObjectToDynObject(objectid, base_objectid, Float:x, Float:y, Floa
 	}
 
 	UpdateDynObjectAttachmentData(att_id);
-	UpdateDynObjectAttachmentStreaming(att_id, instant_attach);
+	UpdateDynObjectAttachmentStream(att_id, instant_attach);
 
 	// Set Base CID
 
@@ -210,8 +210,6 @@ stock UpdateDynObjectAttachmentData(att_id)
 	{
 		case ATT_STREAM_MODE_BASE:
 		{
-			new Float:x, Float:y, Float:z;
-			GetDynamicObjectPos(gDynamicAttachments[att_id][BaseObjectID], x, y, z);
 			SetDynamicObjectPos(gDynamicAttachments[att_id][ObjectID], -25000.0, -25000.0, -1000.0);
 		}
 
@@ -229,7 +227,7 @@ stock UpdateDynObjectAttachmentData(att_id)
 // Updates attachment visibility to players depending on base object state.
 // Might be necessary to call if you change virtual worlds or similar and want to avoid some glitches.
 // If attach is true the item will be reattached instantly (if possible)
-stock UpdateDynObjectAttachmentStreaming(att_id, bool:attach = false)
+stock UpdateDynObjectAttachmentStream(att_id, bool:attach = false)
 {
 	if(!IsValidDynObjectAttachment(att_id))
 		return 0;
@@ -281,7 +279,7 @@ stock DetachDynamicObjectByInternalID(att_id, bool:respawn = true)
 	Streamer_ToggleItemCallbacks(STREAMER_TYPE_OBJECT, gDynamicAttachments[att_id][ObjectID], false);
 	Streamer_ToggleItemStatic(STREAMER_TYPE_OBJECT, gDynamicAttachments[att_id][ObjectID], gDynamicAttachments[att_id][WasStatic]);
 
-	new xxx = Streamer_RemoveIntData(STREAMER_TYPE_OBJECT, gDynamicAttachments[att_id][ObjectID], E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_CHILD));
+	Streamer_RemoveIntData(STREAMER_TYPE_OBJECT, gDynamicAttachments[att_id][ObjectID], E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_CHILD));
 
 	if(Streamer_HasArrayData(STREAMER_TYPE_OBJECT, gDynamicAttachments[att_id][BaseObjectID], E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_BASE)))
 		Streamer_RemoveArrayData(STREAMER_TYPE_OBJECT, gDynamicAttachments[att_id][BaseObjectID], E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_BASE), att_id);
