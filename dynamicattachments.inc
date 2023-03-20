@@ -24,9 +24,6 @@ Most of the streaming logic is handled in PAWN. It's quite straight forward than
 When a dynamic object is attached to another dynamic object the base object priority should be higher than the attached object.
 Not doing so might result in an endless loop of restreaming objects, as attachments might take away an object slot from the base item (which frees up slots etc etc).
 
-To work around streaming distance issues, either the base item or the attachments are set to be static. This is decided based on the streaming mode (see Constants).
-As a result either the base object or its attachments may not adhere to streaming distance rules.
-
 There are currently no checks whether the base object and attached objects share a virtual world/interior. They will never stream if they don't.
 
 It's currently not possible to chain up multiple attachments (ie attach A to B and B to C).
@@ -35,20 +32,37 @@ It's currently not possible to chain up multiple attachments (ie attach A to B a
 
 // ------------------------------------------------------------ Config (redefine before including if necessary)
 
-#if !defined MAX_DYNAMIC_ATTACHMENTS
-#define MAX_DYNAMIC_ATTACHMENTS			250
+#if !defined MAX_DYN_ATTACHMENTS
+#define MAX_DYN_ATTACHMENTS					250
 #endif
 
 // Indexes of the Streamer's E_STREAMER_CUSTOM(...) array.
 // If this collides, define the following two constants with two unique IDs that work for you.
 
-#if !defined DYNAMIC_ATTACHMENTS_CID_BASE
-#define DYNAMIC_ATTACHMENTS_CID_BASE	101
+#if !defined DYN_ATTACHMENTS_CID_BASE
+#define DYN_ATTACHMENTS_CID_BASE			101
 #endif
 
-#if !defined DYNAMIC_ATTACHMENTS_CID_CHILD
-#define DYNAMIC_ATTACHMENTS_CID_CHILD	102
+#if !defined DYN_ATTACHMENTS_CID_CHILD
+#define DYN_ATTACHMENTS_CID_CHILD			102
 #endif
+
+// Hides all child attachments on player disconnect.
+// Makes sure that when they come back no static items remain visible.
+// This prevents a small object spike when the player enters a virtual world/interior for the first time.
+// May not be optimal for large amount of attachments!
+
+#if !defined DYN_ATTACHMENTS_SAFE_DESTREAM
+#define DYN_ATTACHMENTS_SAFE_DESTREAM		true
+#endif
+
+#if !defined DYN_ATTACHMENTS_DEBUG_PREFIX
+#define DYN_ATTACHMENTS_DEBUG_PREFIX		"[DYNATT]"
+#endif
+
+// #define DYN_ATTACHMENTS_DEBUG_STREAMING	Debug messages for base and child object streaming
+// #define DYN_ATTACHMENTS_DEBUG_ALLOC		Debug messages for allocation (internal data)
+// #define DYN_ATTACHMENTS_DEBUG_ALLOC_STR	Debug messages for allocation (streamer)
 
 // ------------------------------------------------------------ Constants
 
@@ -59,7 +73,7 @@ enum (+=1)
 {
 	ATT_STREAM_MODE_BASE = 0, // (default) Streams the base object in/out like normal, attachments will be static. Causes stream distance of attachments to be ignored.
 	ATT_STREAM_MODE_CHILD, // The base object will be static, attachments will be streamed. Unsuitable for far moving objects or objects whose position is changed. A bit smoother streaming.
-	// ATT_STREAM_MODE_MANUAL, // If you want to manually toggle attachments on/off (or when using (Inv)Areas). Not yet supported.
+	ATT_STREAM_MODE_MANUAL, // If you know what you are doing. Does not modify the base or child object's stream distances.
 
 	MAX_DYN_ATTACHMENT_STREAM_MODES
 };
@@ -90,17 +104,17 @@ static enum E_DYNAMIC_ATTACHMENT
 	bool:WasStatic
 };
 
-static gDynamicAttachments[MAX_DYNAMIC_ATTACHMENTS][E_DYNAMIC_ATTACHMENT];
+static gDynamicAttachments[MAX_DYN_ATTACHMENTS][E_DYNAMIC_ATTACHMENT];
 
 // Used internally to retrieve a list of attachments from the streamer.
-static gDynamicAttachmentsList[MAX_DYNAMIC_ATTACHMENTS];
+static gDynamicAttachmentsList[MAX_DYN_ATTACHMENTS];
 
 // ------------------------------------------------------------ Functions
 
 // Note: Internal ID. Returned by AttachDynObjectToDynaObject.
 stock IsValidDynObjectAttachment(att_id)
 {
-	return (att_id >= 0 && att_id < MAX_DYNAMIC_ATTACHMENTS && gDynamicAttachments[att_id][Used]);
+	return (att_id >= 0 && att_id < MAX_DYN_ATTACHMENTS && gDynamicAttachments[att_id][Used]);
 }
 
 // objectid: Dynamic object to attach
@@ -113,12 +127,12 @@ stock AttachDynObjectToDynObject(objectid, base_objectid, Float:x, Float:y, Floa
 	if(!IsValidDynamicObject(objectid) || !IsValidDynamicObject(base_objectid))
 		return -1;
 
-	if(Streamer_HasIntData(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_CHILD)) || Streamer_HasArrayData(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_BASE)))
+	if(Streamer_HasIntData(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_CHILD)) || Streamer_HasArrayData(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_BASE)))
 		return -1;
 
 	new att_id = -1;
 
-	for(new i = 0; i < MAX_DYNAMIC_ATTACHMENTS; ++i)
+	for(new i = 0; i < MAX_DYN_ATTACHMENTS; ++i)
 	{
 		if(!gDynamicAttachments[i][Used])
 		{
@@ -158,41 +172,70 @@ stock AttachDynObjectToDynObject(objectid, base_objectid, Float:x, Float:y, Floa
 	{
 		case ATT_STREAM_MODE_BASE:
 		{
-			Streamer_ToggleItemStatic(STREAMER_TYPE_OBJECT, objectid, true);
-			Streamer_ToggleItemStatic(STREAMER_TYPE_OBJECT, base_objectid, false);
+			if(!gDynamicAttachments[att_id][WasStatic])
+				Streamer_ToggleItemStatic(STREAMER_TYPE_OBJECT, objectid, true);
+
+			if(Streamer_IsToggleItemStatic(STREAMER_TYPE_OBJECT, base_objectid))
+				Streamer_ToggleItemStatic(STREAMER_TYPE_OBJECT, base_objectid, false);
 		}
 
 		case ATT_STREAM_MODE_CHILD:
 		{
-			Streamer_ToggleItemStatic(STREAMER_TYPE_OBJECT, objectid, false);
-			Streamer_ToggleItemStatic(STREAMER_TYPE_OBJECT, base_objectid, true);
+			if(gDynamicAttachments[att_id][WasStatic])
+				Streamer_ToggleItemStatic(STREAMER_TYPE_OBJECT, objectid, false);
+
+			if(!Streamer_IsToggleItemStatic(STREAMER_TYPE_OBJECT, base_objectid))
+				Streamer_ToggleItemStatic(STREAMER_TYPE_OBJECT, base_objectid, true);
 		}
 	}
 
 	UpdateDynObjectAttachmentData(att_id);
 	UpdateDynObjectAttachmentStream(att_id, instant_attach);
 
+	#if defined DYN_ATTACHMENTS_DEBUG_ALLOC
+	printf(DYN_ATTACHMENTS_DEBUG_PREFIX " Created att_id %i", att_id);
+	#endif
+
 	// Set Base CID
 
-	Streamer_SetIntData(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_CHILD), att_id);
+	Streamer_SetIntData(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_CHILD), att_id);
 
 	// Set Child CID
 
-	if(Streamer_HasArrayData(STREAMER_TYPE_OBJECT, base_objectid, E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_BASE)))
+	if(Streamer_HasArrayData(STREAMER_TYPE_OBJECT, base_objectid, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_BASE)))
 	{
-		Streamer_AppendArrayData(STREAMER_TYPE_OBJECT, base_objectid, E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_BASE), att_id);
+		Streamer_AppendArrayData(STREAMER_TYPE_OBJECT, base_objectid, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_BASE), att_id);
+
+		#if defined DYN_ATTACHMENTS_DEBUG_ALLOC_STR
+		printf(DYN_ATTACHMENTS_DEBUG_PREFIX " Appended att_id %i Base CID", att_id);
+		#endif
 	}
 	else
 	{
-		// Should work with SetIntData following docs but it somehow doesn't. This avoids an error message in the console.
+		Streamer_SetIntData(STREAMER_TYPE_OBJECT, base_objectid, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_BASE), att_id);
 
-		new arr[1];
-		arr[0] = att_id;
-
-		Streamer_SetArrayData(STREAMER_TYPE_OBJECT, base_objectid, E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_BASE), arr);
+		#if defined DYN_ATTACHMENTS_DEBUG_ALLOC_STR
+		printf(DYN_ATTACHMENTS_DEBUG_PREFIX " Created att_id %i Base CID (first attachment)", att_id);
+		#endif
 	}
 
 	return att_id;
+}
+
+stock GetDynAttBaseObjectID(att_id)
+{
+	if(!IsValidDynObjectAttachment(att_id))
+		return INVALID_STREAMER_ID;
+
+	return gDynamicAttachments[att_id][BaseObjectID];
+}
+
+stock GetDynAttChildObjectID(att_id)
+{
+	if(!IsValidDynObjectAttachment(att_id))
+		return INVALID_STREAMER_ID;
+
+	return gDynamicAttachments[att_id][ObjectID];
 }
 
 // Updates ModelID, DrawDistance and position for this attachment.
@@ -226,8 +269,8 @@ stock UpdateDynObjectAttachmentData(att_id)
 
 // Updates attachment visibility to players depending on base object state.
 // Might be necessary to call if you change virtual worlds or similar and want to avoid some glitches.
-// If attach is true the item will be reattached instantly (if possible)
-stock UpdateDynObjectAttachmentStream(att_id, bool:attach = false)
+// If instant_attach is true the item will be reattached instantly (if possible)
+stock UpdateDynObjectAttachmentStream(att_id, bool:instant_attach = false)
 {
 	if(!IsValidDynObjectAttachment(att_id))
 		return 0;
@@ -242,7 +285,7 @@ stock UpdateDynObjectAttachmentStream(att_id, bool:attach = false)
 
 			// Attach if already visible
 
-			if(attach)
+			if(instant_attach && !IsPlayerNPC(playerid))
 			{
 				new base_player_objectid = Streamer_GetItemInternalID(playerid, STREAMER_TYPE_OBJECT, gDynamicAttachments[att_id][BaseObjectID]);
 
@@ -253,6 +296,17 @@ stock UpdateDynObjectAttachmentStream(att_id, bool:attach = false)
 					if(att_player_objectid != INVALID_OBJECT_ID)
 					{
 						AttachPlayerObjToPlayerObj(playerid, att_player_objectid, base_player_objectid, gDynamicAttachments[att_id][ModelID], gDynamicAttachments[att_id][X], gDynamicAttachments[att_id][Y], gDynamicAttachments[att_id][Z], gDynamicAttachments[att_id][RX], gDynamicAttachments[att_id][RY], gDynamicAttachments[att_id][RZ], gDynamicAttachments[att_id][SyncRotation], gDynamicAttachments[att_id][DrawDistance], gDynamicAttachments[att_id][NoCameraCol]);
+
+						new modelid, txdname[32], texturename[32], matcolor;
+
+						for(new i = 0; i < 16; ++i)
+						{
+							if(!IsDynamicObjectMaterialUsed(gDynamicAttachments[att_id][ObjectID], i))
+								continue;
+
+							GetDynamicObjectMaterial(gDynamicAttachments[att_id][ObjectID], i, modelid, txdname, texturename, matcolor);
+							SetPlayerObjectMaterial(playerid, att_player_objectid, i, modelid, txdname, texturename, matcolor);
+						}
 					}
 				}
 			}
@@ -276,13 +330,31 @@ stock DetachDynamicObjectByInternalID(att_id, bool:respawn = true)
 
 	gDynamicAttachments[att_id][Used] = false;
 
+	#if defined DYN_ATTACHMENTS_DEBUG_ALLOC
+	printf(DYN_ATTACHMENTS_DEBUG_PREFIX " Destroyed att_id %i", att_id);
+	#endif
+
 	Streamer_ToggleItemCallbacks(STREAMER_TYPE_OBJECT, gDynamicAttachments[att_id][ObjectID], false);
 	Streamer_ToggleItemStatic(STREAMER_TYPE_OBJECT, gDynamicAttachments[att_id][ObjectID], gDynamicAttachments[att_id][WasStatic]);
 
-	Streamer_RemoveIntData(STREAMER_TYPE_OBJECT, gDynamicAttachments[att_id][ObjectID], E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_CHILD));
+	Streamer_RemoveIntData(STREAMER_TYPE_OBJECT, gDynamicAttachments[att_id][ObjectID], E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_CHILD));
 
-	if(Streamer_HasArrayData(STREAMER_TYPE_OBJECT, gDynamicAttachments[att_id][BaseObjectID], E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_BASE)))
-		Streamer_RemoveArrayData(STREAMER_TYPE_OBJECT, gDynamicAttachments[att_id][BaseObjectID], E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_BASE), att_id);
+	if(Streamer_HasArrayData(STREAMER_TYPE_OBJECT, gDynamicAttachments[att_id][BaseObjectID], E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_BASE)))
+	{
+		Streamer_RemoveArrayData(STREAMER_TYPE_OBJECT, gDynamicAttachments[att_id][BaseObjectID], E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_BASE), att_id);
+
+		// Streamer_RemoveArrayData does not actually delete the container, its length will be -1 instead.
+		// To delete the container, use Streamer_RemoveIntData.
+
+		if(Streamer_GetArrayDataLength(STREAMER_TYPE_OBJECT, gDynamicAttachments[att_id][BaseObjectID], E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_BASE)) <= 0)
+		{
+			Streamer_RemoveIntData(STREAMER_TYPE_OBJECT, gDynamicAttachments[att_id][BaseObjectID], E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_BASE));
+
+			#if defined DYN_ATTACHMENTS_DEBUG_ALLOC_STR
+			printf(DYN_ATTACHMENTS_DEBUG_PREFIX " Deleted att_id %i Base CID (no attachments remaining)", att_id);
+			#endif
+		}
+	}
 
 	if(respawn)
 		Streamer_SetIntData(STREAMER_TYPE_OBJECT, gDynamicAttachments[att_id][ObjectID], E_STREAMER_MODEL_ID, Streamer_GetIntData(STREAMER_TYPE_OBJECT, gDynamicAttachments[att_id][ObjectID], E_STREAMER_MODEL_ID));
@@ -295,10 +367,10 @@ stock DetachDynamicObject(objectid, bool:respawn = true)
 	if(!IsValidDynamicObject(objectid))
 		return 0;
 
-	if(!Streamer_HasIntData(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_CHILD)))
+	if(!Streamer_HasIntData(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_CHILD)))
 		return 0;
 
-	new att_id = Streamer_GetIntData(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_CHILD));
+	new att_id = Streamer_GetIntData(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_CHILD));
 
 	if(!IsValidDynObjectAttachment(att_id) || gDynamicAttachments[att_id][ObjectID] != objectid)
 		return 0;
@@ -312,12 +384,15 @@ stock DetachAllDynObjectsFromObject(objectid, bool:respawn = true)
 	if(!IsValidDynamicObject(objectid))
 		return 0;
 
-	if(Streamer_HasArrayData(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_BASE)))
+	if(Streamer_HasArrayData(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_BASE)))
 	{
-		new length = Streamer_GetArrayDataLength(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_BASE));
+		new length = Streamer_GetArrayDataLength(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_BASE));
 
-		if(length > 0 && Streamer_GetArrayData(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_BASE), gDynamicAttachmentsList))
+		if(length > 0 && Streamer_GetArrayData(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_BASE), gDynamicAttachmentsList))
 		{
+			if(length > MAX_DYN_ATTACHMENTS)
+				length = MAX_DYN_ATTACHMENTS;
+
 			for(new i = 0; i < length; ++i)
 			{
 				new att_id = gDynamicAttachmentsList[i];
@@ -329,6 +404,87 @@ stock DetachAllDynObjectsFromObject(objectid, bool:respawn = true)
 			}
 
 			return length;
+		}
+	}
+
+	return 0;
+}
+
+// Returns the internal attachment id if this is either a base or child item.
+// Returns -1 if it's neither.
+// Pass a variable to is_base to check whether it is a base object or child object.
+// If it is a base object, the returned ID might only be the first of many attachments for which it is used as base.
+stock GetDynObjectAttachmentIndex(objectid, &bool:is_base = false)
+{
+	if(!IsValidDynamicObject(objectid))
+		return 0;
+
+	if(Streamer_HasArrayData(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_BASE)))
+	{
+		new length = Streamer_GetArrayDataLength(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_BASE));
+
+		if(length > 0 && Streamer_GetArrayData(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_BASE), gDynamicAttachmentsList))
+		{
+			if(length > MAX_DYN_ATTACHMENTS)
+				length = MAX_DYN_ATTACHMENTS;
+
+			for(new i = 0; i < length; ++i)
+			{
+				if(IsValidDynObjectAttachment(gDynamicAttachmentsList[i]) && objectid == gDynamicAttachments[gDynamicAttachmentsList[i]][BaseObjectID])
+				{
+					is_base = true;
+
+					return gDynamicAttachmentsList[i];
+				}
+			}
+		}
+	}
+
+	if(Streamer_HasIntData(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_CHILD)))
+	{
+		new att_id = Streamer_GetIntData(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_CHILD));
+
+		if(IsValidDynObjectAttachment(att_id) && gDynamicAttachments[att_id][ObjectID] == objectid)
+		{
+			is_base = false;
+
+			return att_id;
+		}
+	}
+
+	return 0;
+}
+
+// Gets all attached item internal ids from a base object.
+// Returns the amount of indexes found, 0 if none were found.
+stock GetAllDynObjectAttachments(objectid, array[], size = sizeof array)
+{
+	if(!IsValidDynamicObject(objectid))
+		return 0;
+
+	if(Streamer_HasArrayData(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_BASE)))
+	{
+		new length = Streamer_GetArrayDataLength(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_BASE));
+
+		if(length > 0 && Streamer_GetArrayData(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_BASE), gDynamicAttachmentsList))
+		{
+			if(length > MAX_DYN_ATTACHMENTS)
+				length = MAX_DYN_ATTACHMENTS;
+
+			new count = 0;
+
+			for(new i = 0; i < length; ++i)
+			{
+				if(IsValidDynObjectAttachment(gDynamicAttachmentsList[i]) && objectid == gDynamicAttachments[att_id][BaseObjectID])
+				{
+					array[count++] = gDynamicAttachmentsList[i];
+
+					if(count == size)
+						break;
+				}
+			}
+
+			return count;
 		}
 	}
 
@@ -428,33 +584,104 @@ AttachPlayerObjToPlayerObj(playerid, objectid, base_objectid, model, Float:x, Fl
 // 	return 1;
 // }
 
+// Loops through all streamer objects to find attachment base and child objects.
+// Used for debugging.
+// Note that this will also count dynamic of other scripts.
+stock CountDynObjectAttachments_D(&count_base, &count_child)
+{
+	count_base = 0;
+	count_child = 0;
+
+	new max_object_id = Streamer_GetUpperBound(STREAMER_TYPE_OBJECT);
+
+	for(new objectid = 0; objectid <= max_object_id; ++objectid)
+	{
+		if(!IsValidDynamicObject(objectid))
+			continue;
+
+		if(Streamer_HasIntData(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_BASE)))
+			++count_base;
+
+		if(Streamer_HasIntData(STREAMER_TYPE_OBJECT, objectid, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_CHILD)))
+			++count_child;
+	}
+
+	return 1;
+}
+
 // ------------------------------------------------------------ Callback Hooks
 
-// forward Streamer_OnItemStreamIn(type, STREAMER_ALL_TAGS:id, forplayerid);
-// forward Streamer_OnItemStreamOut(type, STREAMER_ALL_TAGS:id, forplayerid);
+#if DYN_ATTACHMENTS_SAFE_DESTREAM
+
+public OnPlayerDisconnect(playerid, reason)
+{
+	if(!IsPlayerNPC(playerid))
+	{
+		for(new i = 0; i < MAX_DYN_ATTACHMENTS; ++i)
+		{
+			if(IsValidDynObjectAttachment(i) && IsValidDynamicObject(gDynamicAttachments[i][ObjectID]))
+			{
+				Streamer_ToggleItem(playerid, STREAMER_TYPE_OBJECT, gDynamicAttachments[i][ObjectID], false);
+			}
+		}
+	}
+
+	// ---
+
+	#if defined OATT_OnPlayerDisconnect
+		return OATT_OnPlayerDisconnect(playerid, reason);
+	#else
+		return 1;
+	#endif
+}
+
+#endif
 
 public Streamer_OnItemStreamIn(type, STREAMER_ALL_TAGS:id, forplayerid)
 {
-	if(type == STREAMER_TYPE_OBJECT)
+	if(type == STREAMER_TYPE_OBJECT && !IsPlayerNPC(forplayerid))
 	{
 		// If the custom ID is set, it's (most definitely) an attachment.
 		// From there get the player object ids of the base and attachment, then replace the player object as attachment via AttachPlayerObjToPlayerObj (RPC)
 
-		if(Streamer_HasIntData(STREAMER_TYPE_OBJECT, id, E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_CHILD)))
+		if(Streamer_HasIntData(STREAMER_TYPE_OBJECT, id, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_CHILD)))
 		{
-			new att_id = Streamer_GetIntData(STREAMER_TYPE_OBJECT, id, E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_CHILD));
+			new att_id = Streamer_GetIntData(STREAMER_TYPE_OBJECT, id, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_CHILD));
 
 			if(IsValidDynObjectAttachment(att_id) && _:id == gDynamicAttachments[att_id][ObjectID])
 			{
+				#if defined DYN_ATTACHMENTS_DEBUG_STREAMING
+				printf(DYN_ATTACHMENTS_DEBUG_PREFIX " Child %i streamed in", _:id);
+				#endif
+
 				new base_player_objectid = Streamer_GetItemInternalID(forplayerid, STREAMER_TYPE_OBJECT, gDynamicAttachments[att_id][BaseObjectID]);
 
-				if(base_player_objectid != INVALID_OBJECT_ID)
+				if(base_player_objectid == INVALID_OBJECT_ID)
+				{
+					Streamer_ToggleItem(forplayerid, STREAMER_TYPE_OBJECT, id, false);
+
+					#if defined DYN_ATTACHMENTS_DEBUG_STREAMING
+					printf(DYN_ATTACHMENTS_DEBUG_PREFIX " Streamed out child %i because base is not visible", _:id);
+					#endif
+				}
+				else
 				{
 					new att_player_objectid = Streamer_GetItemInternalID(forplayerid, STREAMER_TYPE_OBJECT, id);
 
 					if(att_player_objectid != INVALID_OBJECT_ID)
 					{
 						AttachPlayerObjToPlayerObj(forplayerid, att_player_objectid, base_player_objectid, gDynamicAttachments[att_id][ModelID], gDynamicAttachments[att_id][X], gDynamicAttachments[att_id][Y], gDynamicAttachments[att_id][Z], gDynamicAttachments[att_id][RX], gDynamicAttachments[att_id][RY], gDynamicAttachments[att_id][RZ], gDynamicAttachments[att_id][SyncRotation], gDynamicAttachments[att_id][DrawDistance], gDynamicAttachments[att_id][NoCameraCol]);
+
+						new modelid, txdname[32], texturename[32], matcolor;
+
+						for(new i = 0; i < 16; ++i)
+						{
+							if(!IsDynamicObjectMaterialUsed(_:id, i))
+								continue;
+
+							GetDynamicObjectMaterial(_:id, i, modelid, txdname, texturename, matcolor);
+							SetPlayerObjectMaterial(forplayerid, att_player_objectid, i, modelid, txdname, texturename, matcolor);
+						}
 					}
 				}
 			}
@@ -462,18 +689,33 @@ public Streamer_OnItemStreamIn(type, STREAMER_ALL_TAGS:id, forplayerid)
 
 		// This is a base item. Get all attachments of this base item and show them for this player.
 
-		if(Streamer_HasArrayData(STREAMER_TYPE_OBJECT, id, E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_BASE)))
+		if(Streamer_HasArrayData(STREAMER_TYPE_OBJECT, id, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_BASE)))
 		{
-			new length = Streamer_GetArrayDataLength(STREAMER_TYPE_OBJECT, id, E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_BASE));
+			#if defined DYN_ATTACHMENTS_DEBUG_STREAMING
+			new bool:notified = false;
+			#endif
 
-			if(length > 0 && Streamer_GetArrayData(STREAMER_TYPE_OBJECT, id, E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_BASE), gDynamicAttachmentsList))
+			new length = Streamer_GetArrayDataLength(STREAMER_TYPE_OBJECT, id, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_BASE));
+
+			if(length > 0 && Streamer_GetArrayData(STREAMER_TYPE_OBJECT, id, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_BASE), gDynamicAttachmentsList))
 			{
+				if(length > MAX_DYN_ATTACHMENTS)
+					length = MAX_DYN_ATTACHMENTS;
+
 				for(new i = 0; i < length; ++i)
 				{
 					new att_id = gDynamicAttachmentsList[i];
 
 					if(IsValidDynObjectAttachment(att_id) && _:id == gDynamicAttachments[att_id][BaseObjectID])
 					{
+						#if defined DYN_ATTACHMENTS_DEBUG_STREAMING
+						if(!notified)
+						{
+							printf(DYN_ATTACHMENTS_DEBUG_PREFIX " Base %i streamed in", _:id);
+							notified = true;
+						}
+						#endif
+
 						Streamer_ToggleItem(forplayerid, STREAMER_TYPE_OBJECT, gDynamicAttachments[att_id][ObjectID], true);
 					}
 				}
@@ -484,7 +726,7 @@ public Streamer_OnItemStreamIn(type, STREAMER_ALL_TAGS:id, forplayerid)
 	// ---
 
 	#if defined OATT_Streamer_OnItemStreamIn
-		return OATT_Streamer_OnItemStreamIn(type, STREAMER_ALL_TAGS:id, forplayerid);
+		return OATT_Streamer_OnItemStreamIn(type, id, forplayerid);
 	#else
 		return 1;
 	#endif
@@ -492,22 +734,37 @@ public Streamer_OnItemStreamIn(type, STREAMER_ALL_TAGS:id, forplayerid)
 
 public Streamer_OnItemStreamOut(type, STREAMER_ALL_TAGS:id, forplayerid)
 {
-	if(type == STREAMER_TYPE_OBJECT)
+	if(type == STREAMER_TYPE_OBJECT && !IsPlayerNPC(forplayerid))
 	{
 		// This is a base item. Get all attachments of this base item and hide them for this player.
 
-		if(Streamer_HasArrayData(STREAMER_TYPE_OBJECT, id, E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_BASE)))
+		if(Streamer_HasArrayData(STREAMER_TYPE_OBJECT, id, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_BASE)))
 		{
-			new length = Streamer_GetArrayDataLength(STREAMER_TYPE_OBJECT, id, E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_BASE));
+			#if defined DYN_ATTACHMENTS_DEBUG_STREAMING
+			new bool:notified = false;
+			#endif
 
-			if(length > 0 && Streamer_GetArrayData(STREAMER_TYPE_OBJECT, id, E_STREAMER_CUSTOM(DYNAMIC_ATTACHMENTS_CID_BASE), gDynamicAttachmentsList))
+			new length = Streamer_GetArrayDataLength(STREAMER_TYPE_OBJECT, id, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_BASE));
+
+			if(length > 0 && Streamer_GetArrayData(STREAMER_TYPE_OBJECT, id, E_STREAMER_CUSTOM(DYN_ATTACHMENTS_CID_BASE), gDynamicAttachmentsList))
 			{
+				if(length > MAX_DYN_ATTACHMENTS)
+					length = MAX_DYN_ATTACHMENTS;
+
 				for(new i = 0; i < length; ++i)
 				{
 					new att_id = gDynamicAttachmentsList[i];
 
 					if(IsValidDynObjectAttachment(att_id) && _:id == gDynamicAttachments[att_id][BaseObjectID])
 					{
+						#if defined DYN_ATTACHMENTS_DEBUG_STREAMING
+						if(!notified)
+						{
+							printf(DYN_ATTACHMENTS_DEBUG_PREFIX " Base %i streamed out", _:id);
+							notified = true;
+						}
+						#endif
+
 						Streamer_ToggleItem(forplayerid, STREAMER_TYPE_OBJECT, gDynamicAttachments[att_id][ObjectID], false);
 					}
 				}
@@ -518,13 +775,29 @@ public Streamer_OnItemStreamOut(type, STREAMER_ALL_TAGS:id, forplayerid)
 	// ---
 
 	#if defined OATT_Streamer_OnItemStreamOut
-		return OATT_Streamer_OnItemStreamOut(type, STREAMER_ALL_TAGS:id, forplayerid);
+		return OATT_Streamer_OnItemStreamOut(type, id, forplayerid);
 	#else
 		return 1;
 	#endif
 }
 
 // ------------------------------------------------------------ Hook Stuff
+
+#if DYN_ATTACHMENTS_SAFE_DESTREAM
+
+#if defined _ALS_OnPlayerDisconnect
+	#undef OnPlayerDisconnect
+#else
+	#define _ALS_OnPlayerDisconnect
+#endif
+#define OnPlayerDisconnect OATT_OnPlayerDisconnect
+#if defined OATT_OnPlayerDisconnect
+	forward OATT_OnPlayerDisconnect(playerid, reason);
+#endif
+
+#endif
+
+// ---
 
 #if defined _ALS_Streamer_OnItemStreamIn
 	#undef Streamer_OnItemStreamIn
