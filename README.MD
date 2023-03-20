@@ -47,7 +47,9 @@ You might need to restore the items to non-static and set the child items to be 
 
 # Streaming Modes
 
-There are currently two supported modes:
+Note that for all modes it is recommended to set the base object's priority higher than that of the child objects. This ensures correct streaming order even if the script's logic is not used. Especially relevant for ATT_STREAM_MODE_MANUAL.
+
+There are currently three supported modes:
 
 - ATT_STREAM_MODE_BASE
 
@@ -59,9 +61,13 @@ This is most suitable in cases where there is enough headroom for all attachment
 
 The opposite of ATT_STREAM_MODE_BASE. The attached object will be streamed based on its position. The base object can be toggled static by the user to avoid streaming glitches, but it is not done by default.
 
-Make sure to make use of priorities and set correct stream distances of the base and child objects.
-
 This mode is unsuitable for moving the base object around over longer distances. It can be moved, but it should remain within the stream distance of its attachments. Not doing so might result in attachments to not appear when they need to.
+
+- ATT_STREAM_MODE_MANUAL
+
+Does not modify the streamer objects in regards to streaming.
+
+You will have to take care of that yourself, for example by using priorities and stream distance, or if (Inv)Areas are used.
 
 # Functions
 
@@ -74,6 +80,18 @@ Returns 1 if the specified attachment index exists. Returns 0 otherwise.
 Attaches a dynamic streamer object to another dynamic streamer object.
 
 Returns the internal attachment id (att_id) or -1 if it fails.
+
+``` GetDynAttBaseObjectID(att_id) ```
+
+Gets the streamer object id of the base object for the given attachment (att_id).
+
+Returns INVALID_STREAMER_ID if the attachment does not exist.
+
+``` GetDynAttChildObjectID(att_id) ```
+
+Gets the streamer object id of the base object for the given attachment (att_id).
+
+Returns INVALID_STREAMER_ID if the attachment does not exist.
 
 ``` UpdateDynObjectAttachmentData(att_id) ```
 
@@ -138,6 +156,12 @@ Because of the way objects were implemented objectid does not need to exist for 
 However, if it does not the next player object created by the server that takes its slot will override this attachment on the client side.
 
 To work around this you can create a dummy player object and use its ID to then create an attachment. That way the server knows that slot is used and functions such as SetPlayerObjectMaterial and DestroyPlayerObject actually work.
+
+``` CountDynObjectAttachments_D(&count_base, &count_child) ```
+
+Counts total amount of base and child items based on Streamer data only.
+
+This is used for debugging. Be aware that attachments created by other scripts will also be included.
 
 # Credits
 
