@@ -23,7 +23,7 @@ It's currently not possible to chain up multiple attachments (ie attach A to B a
 
 - Does not work well for objects that are attached to vehicles (ie attaching A to B and B to a vehicle). There are some streaming issues regarding static objects attached to vehicles.
 
-- Currently attachments do not support material texts. You have to implement that yourself with a text buffer and GetDynamicObjectMaterialText.
+- Currently attachments do not support material texts, but it's easy to implement using the callback functiona and GetDynamicObjectMaterialText + SetPlayerObjectMaterialText.
 
 - Memory usage is a problem when using a lot of attachments as E_STREAMER_CUSTOM uses a data container for each single attachment/base relation. I might switch to a single container for all attachments if deemed necessary.
 
@@ -85,20 +85,20 @@ Default: 250
 
 ``` DYN_ATTACHMENTS_CID_BASE ```
 
-The index of E_STREAMER_CUSTOM to use for base items.
+The index of streamer's data to use for base items.
 Becomes an array if there is more than one attachment on a dynamic object.
 
 Define in case it collides with other scripts.
 
-Default: 101
+Default: E_STREAMER_CUSTOM(101)
 
 ``` DYN_ATTACHMENTS_CID_CHILD ```
 
-The index of E_STREAMER_CUSTOM to use for child items.
+The index of the streamer's data to use for child items.
 
 Define in case it collides with other scripts.
 
-Default: 102
+Default: E_STREAMER_CUSTOM(102)
 
 ``` DYN_ATTACHMENTS_SAFE_DESTREAM ```
 
@@ -143,18 +143,6 @@ Returns 1 if the specified attachment index exists. Returns 0 otherwise.
 Attaches a dynamic streamer object to another dynamic streamer object.
 
 Returns the internal attachment id (att_id) or -1 if it fails.
-
-``` GetDynAttachmentBaseObjectID(att_id) ```
-
-Gets the streamer object id of the base object for the given attachment (att_id).
-
-Returns INVALID_STREAMER_ID if the attachment does not exist.
-
-``` GetDynAttachmentChildObjectID(att_id) ```
-
-Gets the streamer object id of the child object for the given attachment (att_id).
-
-Returns INVALID_STREAMER_ID if the attachment does not exist.
 
 ``` UpdateDynAttachmentData(att_id) ```
 
@@ -245,6 +233,41 @@ Counts total amount of base and child items based on Streamer data only. Loops t
 
 This is used for debugging. Be aware that attachments created by other scripts will also be included.
 
+# Set/Get for Data
+
+Note that all of the set functions only take effect after the next stream-in. They do not modify the currently visible player objects.
+
+You can restream attachments with UpdateDynAttachmentStream.
+
+```
+GetDynAttachmentBaseObjectID(att_id)
+GetDynAttachmentChildObjectID(att_id)
+
+SetDynAttachmentOffsetPos(att_id, Float:x, Float:y, Float:z)
+GetDynAttachmentOffsetPos(att_id, &Float:x, &Float:y, &Float:z)
+
+SetDynAttachmentOffsetRot(att_id, Float:rx, Float:ry, Float:rz)
+GetDynAttachmentOffsetRot(att_id, &Float:rx, &Float:ry, &Float:rz)
+
+SetDynAttachementModelID(att_id, model_id)
+GetDynAttachementModelID(att_id, &model_id)
+
+SetDynAttachmentSyncRotation(att_id, bool:sync_rotation)
+GetDynAttachmentSyncRotation(att_id, &bool:sync_rotation)
+
+SetDynAttachmentDrawDistance(att_id, Float:draw_distance)
+GetDynAttachmentDrawDistance(att_id, &Float:draw_distance)
+
+SetDynAttachmentNoCameraCol(att_id, bool:no_camera_col)
+GetDynAttachmentNoCameraCol(att_id, &bool:no_camera_col)
+
+SetDynAttachmentApplyMaterials(att_id, bool:apply_materials)
+GetDynAttachmentApplyMaterials(att_id, &bool:apply_materials)
+
+SetDynAttachmentEnableCallback(att_id, bool:enable_callback)
+GetDynAttachmentEnableCallback(att_id, &bool:enable_callback)
+```
+
 # Enums
 
 ```
@@ -289,7 +312,7 @@ The return value is ignored.
 
 ``` OnDynAttachmentStreamOut(playerid, att_id) ```
 
-Called when a dynamic attachment is being streamed in.
+Called when a dynamic attachment is being streamed out.
 
 This callback only exists if it has not been disabled globally via DYN_ATTACHMENTS_NO_CALLBACK.
 
